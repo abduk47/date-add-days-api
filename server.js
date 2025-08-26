@@ -66,25 +66,49 @@ function normalizeNanos(secondsBig, nanosInt) {
   return { seconds: s, nanos: Number(n) };
 }
 
+/**
+ * Universal parser that accepts:
+ *  - ISO-8601 UTC string, e.g. "2025-08-17T00:00:00Z"
+ *  - object {seconds, nanos}
+ *  - stringified JSON object "{\"seconds\":\"1608826790\",\"nanos\":0}"
+ */
 function parseInputToEpoch(dateInput) {
+  // Strings: could be ISO or stringified JSON
   if (typeof dateInput === 'string') {
-    const ms = Date.parse(dateInput);
+    const trimmed = dateInput.trim();
+    // Try stringified JSON first
+    if (trimmed.startsWith('{')) {
+      try {
+        const asObj = JSON.parse(trimmed);
+        if (asObj && typeof asObj === 'object' && 'seconds' in asObj) {
+          const s = BigInt(asObj.seconds);
+          const n = Number(asObj.nanos ?? 0);
+          if (!Number.isFinite(n)) throw new Error('timestamp.nanos must be finite');
+          return normalizeNanos(s, n);
+        }
+      } catch (_) {
+        // fall through to ISO
+      }
+    }
+    // ISO 8601 path
+    const ms = Date.parse(trimmed);
     if (Number.isNaN(ms)) {
-      throw new Error('Invalid ISO date string. Use e.g. 2025-08-17T00:00:00Z');
+      throw new Error('Invalid ISO date string. Use e.g. 2025-08-17T00:00:00Z or pass {seconds,nanos}');
     }
     const seconds = BigInt(Math.floor(ms / 1000));
-    const nanos = Number((ms % 1000 + 1000) % 1000) * 1_000_000; // 0..999,999,999
+    const nanos = Number((ms % 1000 + 1000) % 1000) * 1_000_000;
     return normalizeNanos(seconds, nanos);
   }
+
+  // Objects with seconds/nanos
   if (dateInput && typeof dateInput === 'object' && 'seconds' in dateInput) {
-    const sRaw = dateInput.seconds;
-    const nRaw = dateInput.nanos ?? 0;
-    const seconds = BigInt(typeof sRaw === 'string' || typeof sRaw === 'number' ? sRaw : sRaw.toString());
-    const nanos = Number(typeof nRaw === 'string' ? nRaw : nRaw);
+    const seconds = BigInt(dateInput.seconds);
+    const nanos = Number(dateInput.nanos ?? 0);
     if (!Number.isFinite(nanos)) throw new Error('timestamp.nanos must be finite');
     return normalizeNanos(seconds, nanos);
   }
-  throw new Error('Provide "date" as ISO string or {seconds, nanos} object');
+
+  throw new Error('Provide "date" as ISO string, stringified {"seconds","nanos"}, or object {"seconds","nanos"}.');
 }
 
 function epochToOutputs(secondsBig, nanosInt) {
@@ -117,16 +141,22 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 // API v1
 app.post('/v1/add-days', apiKeyMiddleware, (req, res) => {
   try {
-    const { date, days } = req.body ?? {};
-    if (date === undefined || days === undefined) {
-      return res.status(400).json({ error: 'Missing "date" or "days"' });
+    let { date, days, seconds, nanos } = req.body ?? {};
+    // NEW: Accept top-level seconds/nanos when date is missing
+    if (date === undefined && seconds !== undefined) {
+      date = { seconds: String(seconds), nanos: Number(nanos ?? 0) };
     }
-    return res.json(handleAddDays({ date, days }));
+    if (date === undefined || days === undefined) {
+      return res.status(400).json({ error: 'Missing "date" (or top-level seconds/nanos) or "days"' });
+    }
+    const out = handleAddDays({ date, days });
+    return res.json(out);
   } catch (e) {
     return res.status(400).json({ error: String(e.message || e) });
   }
 });
 
+// GET query support stays the same
 app.get('/v1/add-days', apiKeyMiddleware, (req, res) => {
   try {
     const { date, days, seconds, nanos } = req.query;
@@ -149,8 +179,9 @@ const openapi = {
   openapi: '3.0.3',
   info: {
     title: 'Date Add-Days API',
-    version: '1.0.0',
-    description: 'Add integer days to a date; inputs: ISO or {seconds,nanos}. Outputs both YYYY-MM-DD and {seconds,nanos}.'
+    version: '1.1.0',
+    description:
+      'Adds integer days to a date in UTC. Accepts ISO string, {seconds,nanos} object, stringified {seconds,nanos}, or top-level seconds/nanos in POST.'
   },
   servers: [{ url: '/' }],
   components: {
@@ -163,7 +194,7 @@ const openapi = {
         summary: 'Add days (query params)',
         parameters: [
           { name: 'date', in: 'query', schema: { type: 'string', example: '2025-08-17T00:00:00Z' } },
-          { name: 'seconds', in: 'query', schema: { type: 'string', example: '1723852800' } },
+          { name: 'seconds', in: 'query', schema: { type: 'string', example: '1608826790' } },
           { name: 'nanos', in: 'query', schema: { type: 'integer', example: 0 } },
           { name: 'days', in: 'query', required: true, schema: { type: 'integer', example: 5 } }
         ],
@@ -180,24 +211,43 @@ const openapi = {
           content: {
             'application/json': {
               schema: {
-                type: 'object',
-                properties: {
-                  date: {
-                    oneOf: [
-                      { type: 'string', example: '2025-08-17T00:00:00Z' },
-                      {
-                        type: 'object',
-                        properties: {
-                          seconds: { type: 'string', example: '1723852800' },
-                          nanos: { type: 'integer', example: 0 }
-                        },
-                        required: ['seconds']
-                      }
-                    ]
+                oneOf: [
+                  {
+                    type: 'object',
+                    properties: {
+                      date: {
+                        oneOf: [
+                          { type: 'string', description: 'ISO-8601 or stringified {"seconds","nanos"}', example: '2025-08-17T00:00:00Z' },
+                          {
+                            type: 'object',
+                            properties: {
+                              seconds: { type: 'string', example: '1608826790' },
+                              nanos: { type: 'integer', example: 0 }
+                            },
+                            required: ['seconds']
+                          }
+                        ]
+                      },
+                      days: { type: 'integer', example: 5 }
+                    },
+                    required: ['date', 'days']
                   },
-                  days: { type: 'integer', example: 5 }
-                },
-                required: ['date', 'days']
+                  {
+                    type: 'object',
+                    properties: {
+                      seconds: { type: 'string', example: '1608826790' },
+                      nanos: { type: 'integer', example: 0 },
+                      days: { type: 'integer', example: 5 }
+                    },
+                    required: ['seconds', 'days']
+                  }
+                ]
+              },
+              examples: {
+                iso: { value: { date: '2025-08-17T00:00:00Z', days: 3 } },
+                obj: { value: { date: { seconds: '1608826790', nanos: 0 }, days: 5 } },
+                stringified: { value: { date: '{"seconds":"1608826790","nanos":0}', days: 5 } },
+                toplevel: { value: { seconds: '1608826790', nanos: 0, days: 5 } }
               }
             }
           }
