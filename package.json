@@ -1,7 +1,7 @@
 {
   "name": "date-add-days-api",
-  "version": "1.1.0",
-  "description": "Public API: add integer days to a date; universal input support (ISO, {seconds,nanos}, stringified, top-level).",
+  "version": "1.2.1",
+  "description": "Public API: add integer days to a date; returns YYYY-MM-DD, YYYY-MM-DDTHH:MM:SSZ, and {seconds,nanos}. Universal input support.",
   "main": "server.js",
   "type": "module",
   "scripts": {
