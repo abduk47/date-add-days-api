@@ -1,9 +1,12 @@
 {
   "name": "date-add-days-api",
-  "version": "1.2.1",
-  "description": "Public API: add integer days to a date; returns YYYY-MM-DD, YYYY-MM-DDTHH:MM:SSZ, and {seconds,nanos}. Universal input support.",
+  "version": "1.3.0",
+  "description": "HTTP API: add integer days to a date (ISO or {seconds,nanos}), and parse comma-separated strings into arrays. Returns YYYY-MM-DD, YYYY-MM-DDTHH:MM:SSZ, and {seconds,nanos}.",
   "main": "server.js",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js"
   },
